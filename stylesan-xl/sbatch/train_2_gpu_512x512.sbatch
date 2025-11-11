@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=GAN
+#SBATCH --job-name=SAN-GAN-512x512
 #SBATCH --gpus=2
 #SBATCH --cpus-per-task=4
 #SBATCH --time=4-0:0
@@ -30,3 +30,4 @@ python train.py --outdir=./training-runs/ffhq \
         --up_factor 2 \
         --head_layers 7 \
         --path_stem training-runs/ffhq/00016-stylegan3-r-o_bc_left_4x_1536_1024x1024_rgb_256x256-gpus2-batch52/best_model.pkl
+
