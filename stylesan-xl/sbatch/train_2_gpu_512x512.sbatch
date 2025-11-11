@@ -2,7 +2,7 @@
 #SBATCH --job-name=GAN
 #SBATCH --gpus=2
 #SBATCH --cpus-per-task=4
-#SBATCH --time=3-0:0
+#SBATCH --time=4-0:0
 #SBATCH --nodes=1
 #SBATCH --partition=normal
 #SBATCH --account=proj_1631
@@ -17,17 +17,16 @@ source activate san
 
 python train.py --outdir=./training-runs/ffhq \
         --cfg=stylegan3-r \
-        --data=./datasets/o_bc_left_4x_1536_1024x1024_rgb_32x32.zip \
+        --data=./datasets/o_bc_left_4x_1536_1024x1024_rgb_512x512.zip \
         --gpus=2 \
-        --batch=192 \
+        --batch=20 \
         --mirror=1 \
-        --snap 500 \
-        --batch-gpu 96 \
+        --snap 75 \
+        --batch-gpu 10 \
         --kimg 10000 \
         --cond True \
         --syn_layers 6 \
         --superres \
         --up_factor 2 \
         --head_layers 7 \
-        --path_stem training-runs/ffhq/00005-stylegan3-r-o_bc_left_4x_1536_1024x1024_rgb_16x16-gpus2-batch192/best_model.pkl
-
+        --path_stem training-runs/ffhq/00016-stylegan3-r-o_bc_left_4x_1536_1024x1024_rgb_256x256-gpus2-batch52/best_model.pkl
