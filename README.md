@@ -155,6 +155,12 @@ python gen_images.py --outdir=out --seeds=0-1 --batch-sz 1 \
   --network=<path_to_checkpoint>
 ```
 
+```
+python gen_class_samplesheet.py --outdir=sample_sheets --trunc=0.7 \
+  --samples-per-class 10000 --classes 0,1,2 --grid-width 12 \
+  --network=./training-runs/ffhq/00016-stylegan3-r-o_bc_left_4x_1536_1024x1024_rgb_256x256-gpus2-batch52/best_model.pkl
+```
+
 ## Quality Metrics
 You need to preprocess a dataset in advance, following Data Preparation.
 To calculate metrics for a specific network snapshot, run
