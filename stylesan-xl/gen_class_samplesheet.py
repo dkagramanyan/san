@@ -9,7 +9,6 @@ from tqdm import tqdm
 
 import legacy
 import dnnlib
-from training.training_loop import save_image_grid
 from torch_utils import gen_utils
 from gen_images import parse_range
 
@@ -48,23 +47,30 @@ def generate_samplesheet(
     run_dir = Path(gen_utils.make_run_dir(outdir, desc_full))
 
     print('Generating latents.')
-    ws = []
+    ws_per_class = []
     for class_idx in tqdm(classes):
         w = gen_utils.get_w_from_seed(G, samples_per_class, device, truncation_psi, seed=seed,
                                       centroids_path=centroids_path, class_idx=class_idx)
-        ws.append(w)
-    ws = torch.cat(ws)
+        ws_per_class.append(w)
 
-    print('Generating samples.')
-    images = []
-    for w in tqdm(ws.split(batch_gpu)):
-        img = gen_utils.w_to_img(G, w, to_np=True)
-        images.append(img)
-
-    # adjust grid widht to prohibit folding between same class then save to disk
-    grid_width = grid_width - grid_width % samples_per_class
-    images = gen_utils.create_image_grid(np.concatenate(images), grid_size=(grid_width, None))
-    PIL.Image.fromarray(images, 'RGB').save(run_dir / 'sheet.png')
+    print('Generating samples and saving to class folders.')
+    for class_idx, ws in zip(classes, ws_per_class):
+        # Create class folder
+        class_dir = run_dir / f'class_{class_idx}'
+        class_dir.mkdir(exist_ok=True)
+        
+        # Generate images for this class
+        class_images = []
+        for w in tqdm(ws.split(batch_gpu), desc=f'Class {class_idx}', leave=False):
+            img = gen_utils.w_to_img(G, w, to_np=True)
+            class_images.append(img)
+        
+        class_images = np.concatenate(class_images)
+        
+        # Save individual images to class folder
+        for i, img in enumerate(class_images):
+            img_pil = PIL.Image.fromarray(img, 'RGB')
+            img_pil.save(class_dir / f'image_{i:05d}.png')
 
 if __name__ == "__main__":
     generate_samplesheet()
