@@ -38,13 +38,22 @@ _null_tensor = torch.empty([0])
 def _init():
     global _plugin
     if _plugin is None:
-        _plugin = custom_ops.get_plugin(
-            module_name='bias_act_plugin',
-            sources=['bias_act.cpp', 'bias_act.cu'],
-            headers=['bias_act.h'],
-            source_dir=os.path.dirname(__file__),
-            extra_cuda_cflags=['--use_fast_math'],
-        )
+        try:
+            _plugin = custom_ops.get_plugin(
+                module_name='bias_act_plugin',
+                sources=['bias_act.cpp', 'bias_act.cu'],
+                headers=['bias_act.h'],
+                source_dir=os.path.dirname(__file__),
+                extra_cuda_cflags=['--use_fast_math'],
+            )
+        except Exception as e:
+            # If compilation fails, mark as failed and return False to use reference implementation
+            _plugin = False
+            if custom_ops.verbosity in ['brief', 'full']:
+                print(f'Warning: CUDA plugin compilation failed, using reference implementation: {e}')
+            return False
+    if _plugin is False:
+        return False
     return True
 
 #----------------------------------------------------------------------------
