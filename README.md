@@ -144,9 +144,9 @@ To load the checkpoints, use PyTorch 2.1.1 (or later) as described in [Requireme
 ## Generating Samples
 To generate a conditional sample sheet for ImageNet, run
 ```
-python gen_class_samplesheet.py --outdir=sample_sheets --trunc=0.7 \
-  --samples-per-class 6 --classes 95,207,449,713,927,992 --grid-width 12 \
-  --network=<path_to_checkpoint>
+python gen_class_samplesheet.py --outdir=generated --trunc=0.7 \
+  --samples-per-class 1000 --classes 0,1,2 --grid-width 8 --batch-gpu=8 \
+  --network=./runs/ffhq/00017-stylegan3-r-o_bc_left_4x_1536_1024x1024_rgb_512x512-gpus2-batch20/best_model.pkl
 ```
 
 To generate samples for FFHQ, run
