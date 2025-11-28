@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=GAN
-#SBATCH --gpus=2
+#SBATCH --job-name=SAN-GAN-1024
+#SBATCH --gpus=4
 #SBATCH --cpus-per-task=4
 #SBATCH --time=3-0:0
 #SBATCH --nodes=1
@@ -17,13 +17,13 @@ source activate san
 
 cd ..
 
-python train.py --outdir=./training-runs/ffhq \
+python train.py --outdir=./training-runs/wc-cv \
         --cfg=stylegan3-r \
         --data=./datasets/o_bc_left_4x_1536_1024x1024_rgb_32x32.zip \
-        --gpus=2 \
+        --gpus=4 \
         --batch=192 \
         --mirror=1 \
-        --snap 250 \
+        --snap 500 \
         --batch-gpu 96 \
         --kimg 10000 \
         --cond True \
