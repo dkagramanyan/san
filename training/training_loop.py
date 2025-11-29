@@ -149,6 +149,7 @@ def training_loop(
     __AUGMENT_P__ = torch.tensor(augment_p, dtype=torch.float, device=device)
     __PL_MEAN__ = torch.zeros([], device=device)
     best_fid = 9999
+    best_fid_training_step = 0
 
     # Load training set.
     if rank == 0:
@@ -198,7 +199,8 @@ def training_loop(
             __BATCH_IDX__ = resume_data['progress']['batch_idx'].to(device)
             __AUGMENT_P__ = resume_data['progress'].get('augment_p', torch.tensor(0.)).to(device)
             __PL_MEAN__ = resume_data['progress'].get('pl_mean', torch.zeros([])).to(device)
-            best_fid = resume_data['progress']['best_fid']       # only needed for rank == 0
+            best_fid = resume_data['progress'].get('best_fid', 9999)       # only needed for rank == 0
+            best_fid_training_step = resume_data['progress'].get('best_fid_training_step', 0)
 
     # this is relevant when you continue training a lower-res model
     # ie. train 16 model, start training 32 model but continue training 16 model
@@ -474,6 +476,7 @@ def training_loop(
                 'cur_tick': torch.LongTensor([cur_tick]),
                 'batch_idx': torch.LongTensor([batch_idx]),
                 'best_fid': best_fid,
+                'best_fid_training_step': best_fid_training_step,
             }
             if augment_pipe is not None:
                 snapshot_data['progress']['augment_p'] = augment_pipe.p.cpu()
@@ -495,18 +498,40 @@ def training_loop(
                     metric_main.report_metric(result_dict, run_dir=run_dir, snapshot_pkl=snapshot_pkl)
                 stats_metrics.update(result_dict.results)
 
-            # save best fid ckpt
-            snapshot_pkl = os.path.join(run_dir, f'best_model.pkl')
-            cur_nimg_txt = os.path.join(run_dir, f'best_nimg.txt')
+            # Save weights after each FID evaluation
             if rank == 0:
-                if 'fid50k_full' in stats_metrics and stats_metrics['fid50k_full'] < best_fid:
-                    best_fid = stats_metrics['fid50k_full']
-
-                    with open(snapshot_pkl, 'wb') as f:
-                        dill.dump(snapshot_data, f)
-                    # save curr iteration number (directly saving it to pkl leads to problems with multi GPU)
-                    with open(cur_nimg_txt, 'w') as f:
-                        f.write(str(cur_nimg))
+                # Find any FID metric (fid50k_full, fid10k_full, etc.)
+                fid_value = None
+                fid_key = None
+                for key in stats_metrics.keys():
+                    if 'fid' in key.lower():
+                        fid_value = stats_metrics[key]
+                        fid_key = key
+                        break
+                
+                if fid_value is not None:
+                    # Save weights after each evaluation in format: gen_dif={fid}_training_step={training_step}.pth
+                    training_step = cur_nimg
+                    weight_filename = os.path.join(run_dir, f'gen_dif={fid_value:.4f}_training_step={training_step}.pth')
+                    # Save G_ema state dict
+                    torch.save(snapshot_data['G_ema'].state_dict(), weight_filename)
+                    print(f'Saved weights: {weight_filename}')
+                    
+                    # Update best FID and save best weights
+                    if fid_value < best_fid:
+                        # Delete old best file if it exists
+                        old_best_filename = os.path.join(run_dir, f'best_fid={best_fid:.4f}_training_step={best_fid_training_step}.pth')
+                        if os.path.exists(old_best_filename):
+                            os.remove(old_best_filename)
+                        
+                        # Update best FID
+                        best_fid = fid_value
+                        best_fid_training_step = training_step
+                        
+                        # Save new best weights in format: best_fid={best_fid}_training_step={training_step}.pth
+                        best_weight_filename = os.path.join(run_dir, f'best_fid={best_fid:.4f}_training_step={best_fid_training_step}.pth')
+                        torch.save(snapshot_data['G_ema'].state_dict(), best_weight_filename)
+                        print(f'Saved best weights: {best_weight_filename}')
 
         del snapshot_data # conserve memory
 
