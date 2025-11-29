@@ -88,6 +88,35 @@ python dataset_tool.py --source=./data/ffhq/ --dest=./data/ffhq512.zip \
 
 python dataset_tool.py --source=./data/ffhq/ --dest=./data/ffhq1024.zip \
   --resolution=1024x1024
+
+python dataset_tool.py --source=/home/david/mnt/ssd_2_sata/python/phd/datasets/preprocessed/imagenet_9to4_1024x1024 \
+                         --dest=/home/david/mnt/ssd_2_sata/python/phd/datasets/preprocessed/imagenet_9to4_1024x1024_16x16.zip \
+                         --resolution=16x16
+
+python dataset_tool.py --source=/home/david/mnt/ssd_2_sata/python/phd/datasets/preprocessed/imagenet_9to4_1024x1024 \
+                         --dest=/home/david/mnt/ssd_2_sata/python/phd/datasets/preprocessed/imagenet_9to4_1024x1024_32x32.zip \
+                         --resolution=32x32
+
+python dataset_tool.py --source=/home/david/mnt/ssd_2_sata/python/phd/datasets/preprocessed/imagenet_9to4_1024x1024 \
+                         --dest=/home/david/mnt/ssd_2_sata/python/phd/datasets/preprocessed/imagenet_9to4_1024x1024_64x64.zip \
+                         --resolution=64x64                      
+
+python dataset_tool.py --source=/home/david/mnt/ssd_2_sata/python/phd/datasets/preprocessed/imagenet_9to4_1024x1024 \
+                         --dest=/home/david/mnt/ssd_2_sata/python/phd/datasets/preprocessed/imagenet_9to4_1024x1024_128x128.zip \
+                         --resolution=128x128
+
+python dataset_tool.py --source=/home/david/mnt/ssd_2_sata/python/phd/datasets/preprocessed/imagenet_9to4_1024x1024 \
+                         --dest=/home/david/mnt/ssd_2_sata/python/phd/datasets/preprocessed/imagenet_9to4_1024x1024_256x256.zip \
+                         --resolution=256x256
+
+python dataset_tool.py --source=/home/david/mnt/ssd_2_sata/python/phd/datasets/preprocessed/imagenet_9to4_1024x1024 \
+                         --dest=/home/david/mnt/ssd_2_sata/python/phd/datasets/preprocessed/imagenet_9to4_1024x1024_512x512.zip \
+                         --resolution=512x512
+
+python dataset_tool.py --source=/home/david/mnt/ssd_2_sata/python/phd/datasets/preprocessed/imagenet_9to4_1024x1024 \
+                         --dest=/home/david/mnt/ssd_2_sata/python/phd/datasets/preprocessed/imagenet_9to4_1024x1024_1024x1024.zip \
+                         --resolution=1024x1024
+
 ```
 
 ### Training
