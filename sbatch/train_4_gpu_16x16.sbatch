@@ -24,7 +24,7 @@ python train.py --outdir=./runs/wc-cv \
         --gpus=4 \
         --batch=600 \
         --mirror=0 \
-        --snap 100 \
+        --snap 500 \
         --batch-gpu 150 \
         --kimg 20000 \
         --cond True \
