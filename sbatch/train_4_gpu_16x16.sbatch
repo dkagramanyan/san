@@ -22,10 +22,10 @@ python train.py --outdir=./runs/wc-cv \
         --cfg=stylegan3-r \
         --data=./datasets/imagenet_9to4_1024x1024_16x16.zip \
         --gpus=4 \
-        --batch=600 \
+        --batch=560 \
         --mirror=0 \
         --snap 500 \
-        --batch-gpu 150 \
+        --batch-gpu 140 \
         --kimg 20000 \
         --cond True \
         --syn_layers 6
