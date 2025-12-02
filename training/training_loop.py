@@ -514,9 +514,9 @@ def training_loop(
                         break
                 
                 if fid_value is not None:
-                    # Save weights after each evaluation in format: gen_dif={fid}_training_step={training_step}.pth
+                    # Save weights after each evaluation in format: gen_fid={fid}_training_step={training_step}.pth
                     training_step = cur_nimg
-                    weight_filename = os.path.join(run_dir, f'gen_dif={fid_value:.4f}_training_step={training_step}.pth')
+                    weight_filename = os.path.join(run_dir, f'gen_fid={fid_value:.4f}_training_step={training_step}.pth')
                     # Save G_ema state dict (move to CPU only when saving to avoid blocking)
                     G_ema_state = {k: v.cpu().clone() for k, v in snapshot_data['G_ema'].state_dict().items()}
                     torch.save(G_ema_state, weight_filename)
@@ -537,6 +537,11 @@ def training_loop(
                         best_weight_filename = os.path.join(run_dir, f'best_fid={best_fid:.4f}_training_step={best_fid_training_step}.pth')
                         torch.save(G_ema_state, best_weight_filename)
                         print(f'Saved best weights: {best_weight_filename}')
+            
+            # Synchronize all ranks after metrics evaluation and weight saving
+            # This ensures rank 0 finishes saving weights before other ranks proceed to stats collection
+            if num_gpus > 1:
+                torch.distributed.barrier()
 
         del snapshot_data # conserve memory
 
