@@ -138,9 +138,8 @@ def training_loop(
     np.random.seed(random_seed * num_gpus + rank)
     torch.manual_seed(random_seed * num_gpus + rank)
     torch.backends.cudnn.benchmark = cudnn_benchmark    # Improves training speed.
-    # Enable TF32 for faster training (2-3x speedup on Ampere+ GPUs with minimal accuracy impact)
-    torch.backends.cuda.matmul.allow_tf32 = True         # Faster training on modern GPUs
-    torch.backends.cudnn.allow_tf32 = True               # Faster convolutions on modern GPUs
+    torch.backends.cuda.matmul.allow_tf32 = False       # Improves numerical accuracy.
+    torch.backends.cudnn.allow_tf32 = False             # Improves numerical accuracy.
     conv2d_gradfix.enabled = True                       # Improves training speed.
     grid_sample_gradfix.enabled = True                  # Avoids errors with the augmentation pipe.
     __RESTART__ = torch.tensor(0., device=device)       # will be broadcasted to exit loop
@@ -150,19 +149,13 @@ def training_loop(
     __AUGMENT_P__ = torch.tensor(augment_p, dtype=torch.float, device=device)
     __PL_MEAN__ = torch.zeros([], device=device)
     best_fid = 9999
-    best_fid_training_step = 0
 
     # Load training set.
     if rank == 0:
         print('Loading training set...')
     training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs) # subclass of training.dataset.Dataset
     training_set_sampler = misc.InfiniteSampler(dataset=training_set, rank=rank, num_replicas=num_gpus, seed=random_seed)
-    # Optimize DataLoader: persistent workers when >0, drop_last for even shards
-    effective_dl_kwargs = dict(**data_loader_kwargs)
-    if 'persistent_workers' not in effective_dl_kwargs and effective_dl_kwargs.get('num_workers', 0) > 0:
-        effective_dl_kwargs['persistent_workers'] = True
-    effective_dl_kwargs.setdefault('drop_last', True)
-    training_set_iterator = iter(torch.utils.data.DataLoader(dataset=training_set, sampler=training_set_sampler, batch_size=batch_size//num_gpus, **effective_dl_kwargs))
+    training_set_iterator = iter(torch.utils.data.DataLoader(dataset=training_set, sampler=training_set_sampler, batch_size=batch_size//num_gpus, **data_loader_kwargs))
     if rank == 0:
         print()
         print('Num images: ', len(training_set))
@@ -205,8 +198,7 @@ def training_loop(
             __BATCH_IDX__ = resume_data['progress']['batch_idx'].to(device)
             __AUGMENT_P__ = resume_data['progress'].get('augment_p', torch.tensor(0.)).to(device)
             __PL_MEAN__ = resume_data['progress'].get('pl_mean', torch.zeros([])).to(device)
-            best_fid = resume_data['progress'].get('best_fid', 9999)       # only needed for rank == 0
-            best_fid_training_step = resume_data['progress'].get('best_fid_training_step', 0)
+            best_fid = resume_data['progress']['best_fid']       # only needed for rank == 0
 
     # this is relevant when you continue training a lower-res model
     # ie. train 16 model, start training 32 model but continue training 16 model
@@ -327,13 +319,12 @@ def training_loop(
 
         with torch.autograd.profiler.record_function('data_fetch'):
             phase_real_img, phase_real_c = next(training_set_iterator)
-            # Use non_blocking for faster data transfer
-            phase_real_img = (phase_real_img.to(device, non_blocking=True).to(torch.float32) / 127.5 - 1).split(batch_gpu)
-            phase_real_c = phase_real_c.to(device, non_blocking=True).split(batch_gpu)
+            phase_real_img = (phase_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu)
+            phase_real_c = phase_real_c.to(device).split(batch_gpu)
             all_gen_z = torch.randn([len(phases) * batch_size, G.z_dim], device=device)
             all_gen_z = [phase_gen_z.split(batch_gpu) for phase_gen_z in all_gen_z.split(batch_size)]
             all_gen_c = [training_set.get_label(np.random.randint(len(training_set))) for _ in range(len(phases) * batch_size)]
-            all_gen_c = torch.from_numpy(np.stack(all_gen_c)).pin_memory().to(device, non_blocking=True)
+            all_gen_c = torch.from_numpy(np.stack(all_gen_c)).pin_memory().to(device)
             all_gen_c = [phase_gen_c.split(batch_gpu) for phase_gen_c in all_gen_c.split(batch_size)]
 
         # Execute training phases.
@@ -454,12 +445,16 @@ def training_loop(
         snapshot_pkl = None
         snapshot_data = None
         if (network_snapshot_ticks is not None) and (done or cur_tick % network_snapshot_ticks == 0):
-            # Only create snapshot_data when needed for metrics or checkpointing
             snapshot_data = dict(G=G, D=D, G_ema=G_ema, augment_pipe=augment_pipe, training_set_kwargs=dict(training_set_kwargs))
             for key, value in snapshot_data.items():
                 if isinstance(value, torch.nn.Module):
-                    # Keep models on GPU to avoid unnecessary transfers - only move to CPU when actually saving
-                    snapshot_data[key] = value
+                    # value = copy.deepcopy(value).eval().requires_grad_(False)
+                    # value = misc.spectral_to_cpu(value)
+                    # if num_gpus > 1:
+                    #     misc.check_ddp_consistency(value, ignore_regex=r'.*\.[^.]+_(avg|ema)')
+                    #     for param in misc.params_and_buffers(value):
+                    #         torch.distributed.broadcast(param, src=0)
+                    snapshot_data[key] = value #.cpu()
                 del value # conserve memory
 
             # save for current time step (only for superres training, as we do not evaluate metrics here)
@@ -479,7 +474,6 @@ def training_loop(
                 'cur_tick': torch.LongTensor([cur_tick]),
                 'batch_idx': torch.LongTensor([batch_idx]),
                 'best_fid': best_fid,
-                'best_fid_training_step': best_fid_training_step,
             }
             if augment_pipe is not None:
                 snapshot_data['progress']['augment_p'] = augment_pipe.p.cpu()
@@ -496,59 +490,23 @@ def training_loop(
                 print('Evaluating metrics...')
             for metric in metrics:
                 result_dict = metric_main.calc_metric(metric=metric, G=snapshot_data['G_ema'],
-                                                      dataset_kwargs=training_set_kwargs, num_gpus=num_gpus, rank=rank, device=device,
-                                                      batch_gpu=batch_gpu)
+                                                      dataset_kwargs=training_set_kwargs, num_gpus=num_gpus, rank=rank, device=device)
                 if rank == 0:
                     metric_main.report_metric(result_dict, run_dir=run_dir, snapshot_pkl=snapshot_pkl)
                 stats_metrics.update(result_dict.results)
 
-            # Save weights after each FID evaluation (in original .pkl format)
+            # save best fid ckpt
+            snapshot_pkl = os.path.join(run_dir, f'best_model.pkl')
+            cur_nimg_txt = os.path.join(run_dir, f'best_nimg.txt')
             if rank == 0:
-                # Find any FID metric (fid50k_full, fid10k_full, etc.)
-                fid_value = None
-                fid_key = None
-                for key in stats_metrics.keys():
-                    if 'fid' in key.lower():
-                        fid_value = stats_metrics[key]
-                        fid_key = key
-                        break
-                
-                if fid_value is not None:
-                    # Save weights after each evaluation in format matching FID value
-                    training_step = cur_nimg
-                    # Create a copy of G_ema on CPU for saving (same format as original training loop)
-                    G_ema_cpu = copy.deepcopy(snapshot_data['G_ema']).eval().requires_grad_(False).cpu()
-                    weight_data = {'G_ema': G_ema_cpu}
-                    
-                    # Save with FID-based filename: fid={fid_value:.4f}.pkl
-                    weight_filename = os.path.join(run_dir, f'fid={fid_value:.4f}.pkl')
-                    with open(weight_filename, 'wb') as f:
-                        pickle.dump(weight_data, f)
-                    print(f'Saved weights: {weight_filename}')
-                    
-                    # Update best FID and save best weights
-                    if fid_value < best_fid:
-                        # Delete old best file if it exists
-                        old_best_filename = os.path.join(run_dir, f'best_fid={best_fid:.4f}.pkl')
-                        if os.path.exists(old_best_filename):
-                            os.remove(old_best_filename)
-                        
-                        # Update best FID
-                        best_fid = fid_value
-                        best_fid_training_step = training_step
-                        
-                        # Save new best weights: best_fid={best_fid:.4f}.pkl
-                        best_weight_filename = os.path.join(run_dir, f'best_fid={best_fid:.4f}.pkl')
-                        with open(best_weight_filename, 'wb') as f:
-                            pickle.dump(weight_data, f)
-                        print(f'Saved best weights: {best_weight_filename}')
-                    
-                    del G_ema_cpu  # Free memory
-            
-            # Synchronize all ranks after metrics evaluation and weight saving
-            # This ensures rank 0 finishes saving weights before other ranks proceed to stats collection
-            if num_gpus > 1:
-                torch.distributed.barrier()
+                if 'fid50k_full' in stats_metrics and stats_metrics['fid50k_full'] < best_fid:
+                    best_fid = stats_metrics['fid50k_full']
+
+                    with open(snapshot_pkl, 'wb') as f:
+                        dill.dump(snapshot_data, f)
+                    # save curr iteration number (directly saving it to pkl leads to problems with multi GPU)
+                    with open(cur_nimg_txt, 'w') as f:
+                        f.write(str(cur_nimg))
 
         del snapshot_data # conserve memory
 

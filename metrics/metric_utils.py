@@ -33,7 +33,7 @@ from torch_utils import gen_utils
 #----------------------------------------------------------------------------
 
 class MetricOptions:
-    def __init__(self, G=None, G_kwargs={}, dataset_kwargs={}, num_gpus=1, rank=0, device=None, progress=None, cache=True, feature_network=None, batch_gpu=None):
+    def __init__(self, G=None, G_kwargs={}, dataset_kwargs={}, num_gpus=1, rank=0, device=None, progress=None, cache=True, feature_network=None):
         assert 0 <= rank < num_gpus
         self.G              = G
         self.G_kwargs       = dnnlib.EasyDict(G_kwargs)
@@ -44,7 +44,6 @@ class MetricOptions:
         self.progress       = progress.sub() if progress is not None and rank == 0 else ProgressMonitor()
         self.cache          = cache
         self.feature_network = feature_network
-        self.batch_gpu      = batch_gpu  # Training batch size per GPU, used for adaptive batch_gen
 
 #----------------------------------------------------------------------------
 
@@ -274,34 +273,19 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
         random.shuffle(item_subset)
         item_subset = item_subset[:shuffle_size]
 
-    # Optimize data loader kwargs for faster evaluation
-    eval_dl_kwargs = dict(**data_loader_kwargs)
-    if 'persistent_workers' not in eval_dl_kwargs and eval_dl_kwargs.get('num_workers', 0) > 0:
-        eval_dl_kwargs['persistent_workers'] = True
-    eval_dl_kwargs.setdefault('pin_memory', True)
-    eval_dl_kwargs.setdefault('prefetch_factor', 4)  # Increase prefetch for faster loading
-    
-    # Use mixed precision for faster evaluation
-    use_amp = hasattr(torch.cuda, 'amp') and opts.device.type == 'cuda'
-    
-    for images, _labels in tqdm(torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **eval_dl_kwargs)):
+    for images, _labels in tqdm(torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs)):
         if images.shape[1] == 1:
             images = images.repeat([1, 3, 1, 1])
 
         with torch.no_grad():
-            # Use autocast and non_blocking for faster processing
-            with torch.cuda.amp.autocast(enabled=use_amp):
-                if opts.feature_network is None:
-                    features = detector(images.to(opts.device, non_blocking=True), **detector_kwargs)
-                    if sfid:
-                        features = activation['mixed6_conv'][:, :7].flatten(1)
-                else:
-                    images_fp32 = images.to(opts.device, non_blocking=True).to(torch.float32) / 127.5 - 1
-                    features = detector(images_fp32)
-                    features = torch.nn.AdaptiveAvgPool2d(1)(features['3']).squeeze()
-            # Convert to float32 if needed for stats
-            if features.dtype != torch.float32:
-                features = features.float()
+            if opts.feature_network is None:
+                features = detector(images.to(opts.device), **detector_kwargs)
+                if sfid:
+                    features = activation['mixed6_conv'][:, :7].flatten(1)
+            else:
+                images = images.to(opts.device).to(torch.float32) / 127.5 - 1
+                features = detector(images)
+                features = torch.nn.AdaptiveAvgPool2d(1)(features['3']).squeeze()
 
         stats.append_torch(features, num_gpus=opts.num_gpus, rank=opts.rank)
         progress.update(stats.num_items)
@@ -318,23 +302,10 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
 
 def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel_lo=0, rel_hi=1, batch_size=64, batch_gen=None, sfid=False, **stats_kwargs):
     if batch_gen is None:
-        # Adaptive batch_gen based on batch_gpu if available
-        # Evaluation uses less memory than training (no gradients, no optimizer states),
-        # so we can safely use 2-3x batch_gpu for evaluation
-        if hasattr(opts, 'batch_gpu') and opts.batch_gpu is not None and opts.batch_gpu > 0:
-            # Use batch_gpu as baseline, multiply by 2-3 for evaluation (conservative)
-            # Ensure minimum of 4 and maximum of batch_size
-            adaptive_batch_gen = min(batch_size, max(4, opts.batch_gpu * 2))
-            batch_gen = adaptive_batch_gen
-            if opts.rank == 0:
-                print(f'Using adaptive batch_gen={batch_gen} (based on batch_gpu={opts.batch_gpu})')
-        else:
-            # Fallback to conservative default when batch_gpu not available
-            batch_gen = min(batch_size, 8)
+        batch_gen = min(batch_size, 4)
     assert batch_size % batch_gen == 0
 
     # Setup generator and labels.
-    # Note: We keep deepcopy for safety, but the increased batch_gen will still speed up evaluation
     G = copy.deepcopy(opts.G).eval().requires_grad_(False).to(opts.device)
 
     # Initialize.
@@ -354,16 +325,12 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
     if sfid:
         detector.layers.mixed_6.conv.register_forward_hook(getActivation('mixed6_conv'))
 
-    # Use mixed precision for faster evaluation
-    use_amp = hasattr(torch.cuda, 'amp') and opts.device.type == 'cuda'
-    
     while not stats.is_full():
         images = []
         for _i in range(batch_size // batch_gen):
             w = gen_utils.get_w_from_seed(G, batch_gen, opts.device, **opts.G_kwargs)
-            # Use autocast for faster generation
-            with torch.cuda.amp.autocast(enabled=use_amp):
-                img = G.synthesis(w)
+            img = G.synthesis(w)
+
             img = (img * 127.5 + 128).clamp(0, 255).to(torch.uint8)
             images.append(img)
         images = torch.cat(images)
@@ -371,19 +338,14 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
             images = images.repeat([1, 3, 1, 1])
 
         with torch.no_grad():
-            # Use autocast for faster feature extraction
-            with torch.cuda.amp.autocast(enabled=use_amp):
-                if opts.feature_network is None:
-                    features = detector(images.to(opts.device, non_blocking=True), **detector_kwargs)
-                    if sfid:
-                        features = activation['mixed6_conv'][:, :7].flatten(1)
-                else:
-                    images_fp32 = images.to(opts.device, non_blocking=True).to(torch.float32) / 127.5 - 1
-                    features = detector(images_fp32)
-                    features = torch.nn.AdaptiveAvgPool2d(1)(features['3']).squeeze()
-            # Convert to float32 if needed for stats
-            if features.dtype != torch.float32:
-                features = features.float()
+            if opts.feature_network is None:
+                features = detector(images.to(opts.device), **detector_kwargs)
+                if sfid:
+                    features = activation['mixed6_conv'][:, :7].flatten(1)
+            else:
+                images = images.to(opts.device).to(torch.float32) / 127.5 - 1
+                features = detector(images)
+                features = torch.nn.AdaptiveAvgPool2d(1)(features['3']).squeeze()
 
         stats.append_torch(features, num_gpus=opts.num_gpus, rank=opts.rank)
         progress.update(stats.num_items)

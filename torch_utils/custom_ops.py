@@ -133,10 +133,13 @@ def get_plugin(module_name, sources, headers=None, source_dir=None, **build_kwar
 
             # Compile.
             cached_sources = [os.path.join(cached_build_dir, os.path.basename(fname)) for fname in sources]
-            module = torch.utils.cpp_extension.load(name=module_name, build_directory=cached_build_dir,
+            torch.utils.cpp_extension.load(name=module_name, build_directory=cached_build_dir,
                 verbose=verbose_build, sources=cached_sources, **build_kwargs)
         else:
-            module = torch.utils.cpp_extension.load(name=module_name, verbose=verbose_build, sources=sources, **build_kwargs)
+            torch.utils.cpp_extension.load(name=module_name, verbose=verbose_build, sources=sources, **build_kwargs)
+
+        # Load.
+        module = importlib.import_module(module_name)
 
     except:
         if verbosity == 'brief':
